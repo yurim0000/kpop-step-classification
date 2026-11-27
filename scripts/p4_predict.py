@@ -17,10 +17,10 @@ from utils.viser_test import PoseViser
 from importlib import import_module
 
 # Import the same model used during training
-ActionMLP = import_module("p3_train_mlp").ActionMLP
+build_model = import_module("p3_train_mlp").build_model
 from features import make_features, video_fps, resample_fps
 
-MODEL_PATH = ROOT / "checkpoints" / "best_mlp.pth"
+MODEL_META_PATH = ROOT / "checkpoints" / "model_meta.json"  # written by p3_train_mlp.py
 LABEL_PATH = ROOT / "data" / "dataset" / "labels.json"
 META_PATH = ROOT / "data" / "dataset" / "feature_meta.json"  # written by p2_create_dataset.py
 
@@ -120,18 +120,24 @@ def main():
         meta = json.load(f)
 
     # Load trained model
-    model = ActionMLP(
-        input_size=meta["seq_length"] * meta["frame_dim"],
-        num_classes=len(labels),
+    with open(MODEL_META_PATH, "r", encoding="utf-8") as f:
+        model_meta = json.load(f)
+    model = build_model(
+        model_meta["model_type"],
+        (meta["seq_length"], meta["frame_dim"]),
+        len(labels),
     ).to(device)
     model.load_state_dict(
-        torch.load(MODEL_PATH, map_location=device, weights_only=True)
+        torch.load(ROOT / "checkpoints" / model_meta["checkpoint"],
+                   map_location=device, weights_only=True)
     )
+    print(f"Model: {model_meta['model_type']}")
     model.eval()
 
     # Load and prepare input
     motion = load_raw_keypoints(INPUT_PATH)
-    sequences = create_sequences(make_features(resample_fps(motion, video_fps(INPUT_PATH)), meta["feature_set"], meta.get("normalize", "none")))
+    sequences = create_sequences(make_features(resample_fps(motion, video_fps(INPUT_PATH)), meta["feature_set"],
+                      meta.get("normalize", "none"), meta.get("velocity", False)))
 
     X = torch.from_numpy(sequences).to(device)
 

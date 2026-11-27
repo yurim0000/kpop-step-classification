@@ -10,6 +10,7 @@ FEATURE_SET
   "full" : all 33 BlazePose joints -> 99 values / frame   (comparison experiment)
 Both are expressed relative to the hip center (mean of 23, 24) in every frame.
 Note: this removes whole-body travel (crab moves sideways) and whole-body height (jumps).
+NORMALIZE (camera-angle alignment) and VELOCITY (add joint speeds, doubles frame_dim) below.
 """
 import numpy as np
 from pathlib import Path
@@ -44,21 +45,34 @@ def _align(rel, motion, mode):
     return out / leg
 
 
-def make_features(motion, feature_set=FEATURE_SET, normalize=NORMALIZE):
-    """motion: (T, 33, 3) of ONE video -> (T, J, 3), hip-centered (+ aligned), selected joints only."""
+# VELOCITY: also give the model how fast each joint moves (frame-to-frame difference x fps,
+# i.e. leg-lengths per second). Step identity is mostly in how the feet move, not where they are.
+VELOCITY = True
+
+
+def make_features(motion, feature_set=FEATURE_SET, normalize=NORMALIZE, velocity=VELOCITY,
+                  fps=30):
+    """
+    motion: (T, 33, 3) of ONE video (already at TARGET_FPS)
+    -> (T, J, 3) positions, or (T, 2J, 3) positions + velocities if velocity=True
+    """
     if motion.ndim != 3 or motion.shape[1:] != (33, 3):
         raise ValueError(f"Invalid motion shape: {motion.shape}")
     pelvis = (motion[:, 23] + motion[:, 24]) / 2
     rel = motion - pelvis[:, None, :]
     if normalize != "none":
         rel = _align(rel, motion, normalize)
-    return rel[:, FEATURE_SETS[feature_set]]
+    feat = rel[:, FEATURE_SETS[feature_set]]
+    if velocity:
+        vel = np.diff(feat, axis=0, prepend=feat[:1]) * fps
+        feat = np.concatenate([feat, vel], axis=1)
+    return feat
 
 
-def feature_meta(feature_set=FEATURE_SET, normalize=NORMALIZE):
+def feature_meta(feature_set=FEATURE_SET, normalize=NORMALIZE, velocity=VELOCITY):
     joints = FEATURE_SETS[feature_set]
-    return {"feature_set": feature_set, "normalize": normalize,
-            "joints": joints, "frame_dim": len(joints) * 3}
+    return {"feature_set": feature_set, "normalize": normalize, "velocity": velocity,
+            "joints": joints, "frame_dim": len(joints) * 3 * (2 if velocity else 1)}
 
 
 TARGET_FPS = 30  # internet videos come at 24/30/60 fps: resample so a 30-frame window is always ~1 s

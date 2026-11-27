@@ -35,6 +35,43 @@ class ActionMLP(nn.Module):
         return self.network(x)
 
 
+class ActionCNN1D(nn.Module):
+    """
+    1D CNN over time: each frame's values are channels, convolution slides along the 30 frames,
+    so the same short movement pattern is recognized wherever it occurs in the window.
+    """
+    def __init__(self, frame_dim, num_classes=2):
+        super().__init__()
+
+        self.network = nn.Sequential(
+            nn.Conv1d(frame_dim, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.Conv1d(64, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1),
+            nn.Flatten(),
+            nn.Dropout(0.3),
+            nn.Linear(64, num_classes)
+        )
+
+    def forward(self, x):                 # x: (batch, frames, frame_dim)
+        return self.network(x.transpose(1, 2))
+
+
+MODEL_TYPE = "cnn"   # "mlp" (baseline) | "cnn"  -> model comparison experiment
+
+
+def build_model(model_type, seq_shape, num_classes):
+    """seq_shape = (frames, frame_dim). Used here and in p4_predict.py."""
+    if model_type == "mlp":
+        return ActionMLP(input_size=int(np.prod(seq_shape)), num_classes=num_classes)
+    if model_type == "cnn":
+        return ActionCNN1D(frame_dim=seq_shape[1], num_classes=num_classes)
+    raise ValueError(f"Unknown model type: {model_type}")
+
+
 def main():
     torch.manual_seed(42)
 
@@ -68,9 +105,13 @@ def main():
     # Create MLP model (input size follows the dataset: 30 x 45 for upper body, 30 x 99 for full body)
     with open(DATA_DIR / "labels.json", "r", encoding="utf-8") as f:
         num_classes = len(json.load(f))
-    input_size = int(np.prod(X_train.shape[1:]))
-    print(f"Input: {X_train.shape[1:]} -> {input_size}, classes: {num_classes}")
-    model = ActionMLP(input_size=input_size, num_classes=num_classes).to(device)
+    print(f"Model: {MODEL_TYPE} | input: {X_train.shape[1:]} | classes: {num_classes}")
+    model = build_model(MODEL_TYPE, X_train.shape[1:], num_classes).to(device)
+    model_path = MODEL_DIR / f"best_{MODEL_TYPE}.pth"
+    # tells p4_predict.py which model to rebuild
+    with open(MODEL_DIR / "model_meta.json", "w", encoding="utf-8") as f:
+        json.dump({"model_type": MODEL_TYPE, "checkpoint": model_path.name,
+                   "seq_shape": list(X_train.shape[1:])}, f, indent=2)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(
@@ -139,7 +180,7 @@ def main():
 
             torch.save(
                 model.state_dict(),
-                MODEL_DIR / "best_mlp.pth"
+                model_path
             )
 
     print("\nTraining completed.")
