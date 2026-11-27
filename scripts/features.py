@@ -12,6 +12,7 @@ Both are expressed relative to the hip center (mean of 23, 24) in every frame.
 Note: this removes whole-body travel (crab moves sideways) and whole-body height (jumps).
 """
 import numpy as np
+from pathlib import Path
 
 LOWER_BODY = list(range(23, 33))
 FEATURE_SETS = {
@@ -33,3 +34,22 @@ def make_features(motion, feature_set=FEATURE_SET):
 def feature_meta(feature_set=FEATURE_SET):
     joints = FEATURE_SETS[feature_set]
     return {"feature_set": feature_set, "joints": joints, "frame_dim": len(joints) * 3}
+
+
+TARGET_FPS = 30  # internet videos come at 24/30/60 fps: resample so a 30-frame window is always ~1 s
+
+
+def video_fps(path):
+    """fps stored by p1 in the npz (None for older files / .npy)."""
+    if Path(path).suffix != ".npz":
+        return None
+    d = np.load(path, allow_pickle=True)
+    return float(d["fps"]) if "fps" in d.files and float(d["fps"]) > 0 else None
+
+
+def resample_fps(motion, fps, target=TARGET_FPS):
+    """(T,...) -> frames picked at target fps (nearest frame). No-op if fps unknown or ~target."""
+    if fps is None or abs(fps - target) < 1:
+        return motion
+    idx = np.round(np.arange(0, len(motion), fps / target)).astype(int)
+    return motion[idx[idx < len(motion)]]

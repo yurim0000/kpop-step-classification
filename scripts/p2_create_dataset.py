@@ -1,11 +1,10 @@
 
 from pathlib import Path
 import json
-import re
 import pandas as pd
 import numpy as np
 
-from features import FEATURE_SET, make_features, feature_meta
+from features import FEATURE_SET, make_features, feature_meta, video_fps, resample_fps, TARGET_FPS
 
 ROOT = Path(__file__).resolve().parent.parent
 INPUT_DIR = ROOT / "data" / "raw_keypoints"
@@ -67,35 +66,8 @@ def create_sequences(motion):
     return sequences
 
 
-def speed_of(path):
-    """'hiphop_twostep_slow_1.npz' -> 'slow' ; None if the name has no slow/fast part."""
-    m = re.search(r"_(slow|fast)_", path.stem.lower() + "_")
-    return m.group(1) if m else None
-
-
 def split_video_paths(paths, rng):
-    """
-    Split by video, not by individual sequence.
-    If file names carry the speed (<step>_<slow|fast>_<n>), validation gets videos
-    from both speeds, so the model is not checked on one speed only.
-    """
-    paths = list(paths)
-    groups = {}
-    for p in paths:
-        groups.setdefault(speed_of(p), []).append(p)
-
-    if None not in groups and len(groups) > 1:
-        train, val = [], []
-        for bpm in sorted(groups):
-            t, v = _split(groups[bpm], rng)
-            train += t
-            val += v
-        return train, val
-
-    return _split(paths, rng)
-
-
-def _split(paths, rng):
+    """Split by video, not by individual sequence (windows of one video never land in both sets)."""
     paths = list(paths)
     rng.shuffle(paths)
 
@@ -154,6 +126,7 @@ def build_dataset():
         ]:
             for path in selected_paths:
                 motion = load_raw_keypoints(path)
+                motion = resample_fps(motion, video_fps(path))  # same time scale for every video
                 
                 # TODO (Optional):
                 # 1. Design custom input features from motion data
@@ -197,7 +170,7 @@ def build_dataset():
         json.dump(labels, f, indent=2, ensure_ascii=False)
 
     # read by p3 (model input size) and p4 (same features at inference)
-    meta = {**feature_meta(FEATURE_SET), "seq_length": SEQ_LENGTH, "stride": STRIDE}
+    meta = {**feature_meta(FEATURE_SET), "seq_length": SEQ_LENGTH, "stride": STRIDE, "fps": TARGET_FPS}
     with open(OUTPUT_DIR / "feature_meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 

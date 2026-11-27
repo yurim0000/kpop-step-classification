@@ -8,7 +8,7 @@ and report lower-body motion metrics.
 
 Run from final_project/ :
     python scripts/p1_3_analyze_postprocessing.py                       # every .npz under data/raw_keypoints
-    python scripts/p1_3_analyze_postprocessing.py --file data/raw_keypoints/crab/crab_slow_1.npz
+    python scripts/p1_3_analyze_postprocessing.py --file data/raw_keypoints/crab/crab_1.npz
 
 Outputs (data/output/):  <name>_metrics.csv, <name>_analysis.png, all_metrics.csv
 
@@ -55,7 +55,7 @@ LOWER = list(range(23, 33))        # hips, knees, ankles, heels, toes
 HEEL = {"L": 29, "R": 30}
 TOE = {"L": 31, "R": 32}
 ANKLE = {"L": 27, "R": 28}
-# step-cycle search range: 100-130 BPM -> one beat 0.46-0.6 s; a left-right cycle is 1-4 beats
+# step-cycle search range: covers ~60-180 BPM dance tempos (a left-right cycle is 1-4 beats)
 CYCLE_RANGE_S = (0.25, 2.5)
 
 
