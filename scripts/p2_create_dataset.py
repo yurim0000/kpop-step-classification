@@ -66,21 +66,40 @@ def create_sequences(motion):
     return sequences
 
 
-def split_video_paths(paths, rng):
-    """Split by video, not by individual sequence (windows of one video never land in both sets)."""
-    paths = list(paths)
-    rng.shuffle(paths)
+MIRROR_PAIRS_PATH = ROOT / "data" / "mirror_pairs.json"   # written by p0_mirror_videos.py
+MIRROR_PAIRS = (json.loads(MIRROR_PAIRS_PATH.read_text(encoding="utf-8"))
+                if MIRROR_PAIRS_PATH.exists() else {})
 
-    if len(paths) < 2:
+
+def source_of(path):
+    """'crab/crab_9' (mirror) -> 'crab/crab_1' ; any other video -> itself."""
+    key = f"{path.parent.name}/{path.stem}"
+    return MIRROR_PAIRS.get(key, key)
+
+
+def split_video_paths(paths, rng):
+    """
+    Split by video, not by individual sequence (windows of one video never land in both sets).
+    A video and its mirrored copy form one group, so they always land on the same side.
+    """
+    groups = {}
+    for p in paths:
+        groups.setdefault(source_of(p), []).append(p)
+    keys = sorted(groups)
+    rng.shuffle(keys)
+
+    if len(keys) < 2:
         raise ValueError(
             "Each class needs at least two videos "
             "for train/validation splitting."
         )
 
-    n_val = max(1, round(len(paths) * VAL_RATIO))
-    n_val = min(n_val, len(paths) - 1)
+    n_val = max(1, round(len(keys) * VAL_RATIO))
+    n_val = min(n_val, len(keys) - 1)
 
-    return paths[n_val:], paths[:n_val]
+    train = [p for k in keys[n_val:] for p in groups[k]]
+    val = [p for k in keys[:n_val] for p in groups[k]]
+    return train, val
 
 
 def build_dataset():
