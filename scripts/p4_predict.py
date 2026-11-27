@@ -131,7 +131,7 @@ def main():
 
     # Load and prepare input
     motion = load_raw_keypoints(INPUT_PATH)
-    sequences = create_sequences(make_features(resample_fps(motion, video_fps(INPUT_PATH)), meta["feature_set"]))
+    sequences = create_sequences(make_features(resample_fps(motion, video_fps(INPUT_PATH)), meta["feature_set"], meta.get("normalize", "none")))
 
     X = torch.from_numpy(sequences).to(device)
 
