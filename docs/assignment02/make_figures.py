@@ -87,7 +87,7 @@ ax = axs[2]
 cols = [RED if v >= 50 else BLUE2 for v in vis]
 ax.bar(range(len(vis)), vis, color=cols, width=0.85)
 ax.axhline(50, c="#555555", lw=0.8, ls="--")
-ax.set_title(f"C. 발 가시성 낮음 ({sum(v >= 50 for v in vis)}/{len(vis)}개 영상이 50% 이상)")
+ax.set_title("C. 영상별 발 좌표 추출이 어려운 프레임 비율")
 ax.set_xlabel("영상 (정렬)"); ax.set_ylabel("발 가시성 < 0.5 프레임 비율 (%)"); ax.set_xticks([])
 fig.tight_layout(); fig.savefig(OUT / "fig2_problems.png", dpi=220, bbox_inches="tight"); plt.close(fig)
 
@@ -108,18 +108,18 @@ ref2d = (low2d - np.percentile(low2d, 5)) / leg_px
 
 fig, axs = plt.subplots(1, 3, figsize=(13.2, 3.7))
 ax = axs[0]
-ax.plot(t, lowest_foot(corr) / leg, c=ORANGE, lw=1.8, label="제공 보정")
+ax.plot(t, lowest_foot(corr) / leg, c=ORANGE, lw=1.8, label="① 높이 보정")
 ax.plot(t, ref2d, c="#333333", lw=1.2, ls="--", label="2D 영상 기준")
-ax.plot(t, lowest_foot(imp) / leg, c=BLUE, lw=2.2, label="개선")
-ax.set_title("A. 점프 보존: 더 낮은 발의 높이")
+ax.plot(t, lowest_foot(imp) / leg, c=BLUE, lw=2.2, label="②~④ 적용")
+ax.set_title("A 해결 (③): 점프가 남는다 (더 낮은 발의 높이)")
 ax.set_xlabel("시간 (초)"); ax.set_ylabel("다리 길이 단위"); ax.legend(fontsize=9, frameon=False, loc="upper right")
 ax.set_ylim(top=ax.get_ylim()[1] * 1.25)
 ax = axs[1]
 m = (t >= 1.0) & (t <= 2.5)
 sg_only = savgol_filter(filled, a.SG_WINDOW, a.SG_POLY, axis=0)
-ax.plot(t[m], corr[m, 31, 1] / leg, c=ORANGE, lw=1.4, marker="o", ms=3, label="제공 보정")
-ax.plot(t[m], (sg_only[m, 31, 1] - (W[m, 31, 1] - corr[m, 31, 1])) / leg, c=BLUE, lw=2.2, label="+ S-G 평활화")
-ax.set_title("B. 떨림 제거: 왼발끝 높이 (1.5초 확대)")
+ax.plot(t[m], corr[m, 31, 1] / leg, c=ORANGE, lw=1.4, marker="o", ms=3, label="① 높이 보정")
+ax.plot(t[m], (sg_only[m, 31, 1] - (W[m, 31, 1] - corr[m, 31, 1])) / leg, c=BLUE, lw=2.2, label="+ ④ 평활화")
+ax.set_title("B 해결 (④): 떨림 제거 (1.5초 확대)")
 ax.set_xlabel("시간 (초)"); ax.set_ylabel("다리 길이 단위"); ax.legend(fontsize=9, frameon=False)
 ax = axs[2]
 CLIP_C, J_C = "charleston/charleston_12", 31
@@ -136,8 +136,8 @@ for s_, e_ in zip(*[np.flatnonzero(np.diff(np.r_[0, x.astype(int), 0]) == v) for
 for s_, e_ in zip(*[np.flatnonzero(np.diff(np.r_[0, x.astype(int), 0]) == v) for x, v in ((fix, 1), (fix, -1))]):
     ax.axvspan(t[s_], t[min(e_, len(t) - 1)], color=BLUE, alpha=0.15, lw=0)
 ax.plot(t, Wc[:, J_C, 1] / legc, c=GREY, lw=1.2, label="raw")
-ax.plot(t, filled_c[:, J_C, 1] / legc, c=BLUE, lw=1.6, label="짧은 구간 보간")
-ax.set_title("C. 발 가시성 낮은 구간 (파랑: 보간, 빨강: 복원 불가)")
+ax.plot(t, filled_c[:, J_C, 1] / legc, c=BLUE, lw=1.6, label="② 짧은 구간 보간")
+ax.set_title("C 해결 (②): 파랑 = 보간, 빨강 = 긴 구간(그대로)")
 ax.set_xlabel("시간 (초)"); ax.set_ylabel("왼발끝 y (다리 길이)")
 y0, y1 = ax.get_ylim(); ax.set_ylim(y0 - 0.22 * (y1 - y0), y1)
 ax.legend(fontsize=9, frameon=False, loc="lower center", ncol=2)

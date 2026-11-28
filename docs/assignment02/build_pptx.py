@@ -127,41 +127,38 @@ remove(s, "TextBox 33", "TextBox 3")
 picture(s, FIG / "fig2_problems.png", 0.5, 1.4, w=12.3, name="Figure: three data problems",
         alt="A: 3D hip height stays at zero while the 2D hip moves. B: raw toe height jitters around a smooth trend. C: share of frames with low foot visibility per video")
 cols = [
-    ("A. 바닥과 이동 정보 없음", "world 좌표는 골반 중심 기준이다(44개 영상 모두 |골반| ≤ 5mm). 2D에서는 골반이 분명히 움직이는데, 3D에서는 바닥 접촉, 점프, 옆 이동(크랩)이 보이지 않는다."),
+    ("A. 바닥과 이동 정보 없음", "발은 잘리거나 가려져 좌표가 자주 흔들리므로, 항상 안정적으로 잡히는 골반을 기준점(원점)으로 쓴다(44개 모두 |골반| ≤ 5mm). 대신 바닥 접촉, 점프, 옆 이동(크랩)은 3D에서 보이지 않는다."),
     ("B. 프레임 간 떨림", "관절이 프레임마다 흔들린다(raw 하체 떨림: 프레임당 다리 길이의 0.018배). 스텝 지표를 좌우하는 발에서 특히 심하다."),
-    ("C. 믿기 어려운 발 좌표", "프레임의 14.8%에서 뒤꿈치/발끝 가시성 < 0.5다. 그중 82%는 발이 화면 안에 있어, 바지·가림·흐림으로 모델의 확신도만 낮은 경우가 많다. 이 비율이 50% 이상이던 13개 영상은 수집 단계에서 뺐다."),
+    ("C. 발 좌표 추출의 어려움", "발이 화면 아래로 잘리거나 밖으로 나가고, 바지나 다른 발에 가려지면 발 좌표의 신뢰도(가시성)가 떨어진다. 전체 프레임의 14.8%가 이런 경우다. 이런 프레임이 절반을 넘던 13개 영상은 수집 단계에서 뺐다."),
 ]
 for i, (head, body) in enumerate(cols):
     x = 0.5 + i * 4.2
-    card(s, x, 5.0, 3.9, 1.7, f"Problem card {i + 1}")
-    text(s, x + 0.2, 5.12, 3.5, 1.5, [[(head, {"bold": True, "color": BLUE, "size": 14})],
+    card(s, x, 4.95, 3.9, 1.85, f"Problem card {i + 1}")
+    text(s, x + 0.2, 5.05, 3.5, 1.7, [[(head, {"bold": True, "color": BLUE, "size": 14})],
                                       [(body, {"size": 12})]], name=f"Problem {i + 1}")
-code_ref(s, 6.85, "scripts/p1_3_analyze_postprocessing.py   (지표 단위: 다리 길이 = 골반 중심에서 발목 중심까지)")
+code_ref(s, 6.95, "scripts/p1_3_analyze_postprocessing.py   (지표 단위: 다리 길이 = 골반 중심에서 발목 중심까지)")
 
 # ================================================================ slide 3: post-processing
 s = content[2]
 set_text(shape(s, "TextBox 6"), "3. 후처리")
 remove(s, "TextBox 33", "TextBox 3")
-card(s, 0.5, 1.45, 4.55, 1.85, "Method card 1")
-text(s, 0.72, 1.57, 4.15, 1.65, [[("제공 방법: 높이 보정", {"bold": True, "color": ORANGE, "size": 16})],
-                                  [("ground(t) = min( y_왼발끝(t), y_오른발끝(t) )", {"size": 12})],
-                                  [("y_j(t) ← max( y_j(t) − ground(t), 0 )", {"size": 12})],
-                                  [("매 프레임 더 낮은 발을 바닥(y = 0)에 맞춤", {"size": 12})]], name="Method 1")
-card(s, 5.25, 1.45, 7.6, 1.85, "Method card 2")
-steps = [("① 빈 구간 보간 → C  ", "포즈가 빠진 프레임과 발 가시성 < 0.5 구간 중 0.33초 이하를 앞뒤 값으로 보간"),
-         ("② 몸 전체 위치 복원 → A  ", "2D 영상의 골반 위치를 다리 길이 비율로 m 단위로 바꿔 3D에 더함. 바닥은 영상 전체에서 한 번만 정함"),
-         ("③ Savitzky-Golay 평활화 → B  ", "창 9프레임(0.3초), 3차 다항식. 스텝 최고점은 유지")]
-text(s, 5.47, 1.57, 7.2, 1.65, [[("보너스: 개선 후처리 (세 문제에 하나씩 대응)", {"bold": True, "color": BLUE, "size": 16})]] +
-     [[(h, {"bold": True, "color": BLUE, "size": 12}), (b, {"size": 12})] for h, b in steps], name="Method 2")
+card(s, 0.5, 1.45, 12.35, 1.95, "Method card")
+steps = [("① 높이 보정 → A  ", "매 프레임 더 낮은 발끝을 바닥(y = 0)에 맞춘다:  ground(t) = min(y_왼발끝, y_오른발끝),  y ← max(y − ground, 0)"),
+         ("② 빈 구간 보간 → C  ", "포즈가 빠지거나 발 좌표 신뢰도가 낮은 구간 중 0.33초 이하를 앞뒤 값으로 채운다"),
+         ("③ 몸 전체 위치 복원 → A  ", "①은 점프까지 바닥에 붙이므로, 2D 영상의 골반 위치를 m 단위로 바꿔 더하고 바닥은 영상 전체에서 한 번만 정한다"),
+         ("④ Savitzky-Golay 평활화 → B  ", "창 9프레임(0.3초), 3차 다항식. 스텝의 최고점은 유지된다")]
+text(s, 0.75, 1.55, 11.9, 1.8, [[("문제 해결을 위한 후처리", {"bold": True, "color": BLUE, "size": 16}),
+                                 ("   ①은 제공 코드, ②~④는 추가 구현", {"color": MUTED, "size": 12})]] +
+     [[(h, {"bold": True, "color": BLUE, "size": 12}), (b, {"size": 12})] for h, b in steps], name="Method steps")
 picture(s, FIG / "fig3_postprocessing.png", 0.5, 3.5, w=12.3, name="Figure: improved post-processing",
         alt="A: lowest-foot height is pinned to zero by the provided correction but follows the 2D reference after the improved method. B: toe height jitter before and after smoothing. C: short low-visibility stretches interpolated, long ones left as detected")
-code_ref(s, 6.95, "scripts/p1_2_post_processing.py (제공)  +  scripts/p1_3_analyze_postprocessing.py (improved_postprocess, 비교)")
+code_ref(s, 6.95, "①  scripts/p1_2_post_processing.py      ②~④  scripts/p1_3_analyze_postprocessing.py (improved_postprocess)")
 
 # ================================================================ slide 4: results & analysis
 s = content[3]
 set_text(shape(s, "TextBox 6"), "4. 결과 및 분석")
 remove(s, "TextBox 33", "TextBox 3")
-rows = [("지표 (44개 영상 중앙값)", "Raw", "제공 보정", "제공+S-G", "개선"),
+rows = [("지표 (44개 영상 중앙값)", "Raw", "① 높이 보정", "① + ④", "②+③+④"),
         ("양발이 모두 뜬 높이, p95", "0.134", "0.000", "0.003", "0.127"),
         ("2D 점프 크기와의 상관", "0.27", "-", "0.26", "0.59"),
         ("발 드는 높이, p95", "0.280", "0.229", "0.221", "0.291"),
@@ -170,7 +167,7 @@ rows = [("지표 (44개 영상 중앙값)", "Raw", "제공 보정", "제공+S-G"
 tbl = s.shapes.add_table(len(rows), 5, Inches(0.5), Inches(1.5), Inches(7.0), Inches(2.6))
 tbl.name = "Metrics table"
 t = tbl.table
-for j, w in enumerate([2.8, 1.0, 1.05, 1.15, 1.0]):
+for j, w in enumerate([2.55, 0.9, 1.25, 1.05, 1.25]):
     t.columns[j].width = Inches(w)
 for i, row in enumerate(rows):
     for j, v in enumerate(row):
@@ -188,9 +185,9 @@ text(s, 0.5, 4.2, 7.0, 0.3, [[("단위: 다리 길이 (jerk: 다리 길이 / s³
 
 cd = CategoryChartData()
 cd.categories = ["양발이 뜬 높이", "떨림", "발목 jerk"]
-cd.add_series("제공 보정", (0, 104.2, 104.4))
-cd.add_series("제공+S-G", (2.1, 31.8, 18.9))
-cd.add_series("개선", (94.7, 33.3, 19.3))
+cd.add_series("① 높이 보정", (0, 104.2, 104.4))
+cd.add_series("① + ④", (2.1, 31.8, 18.9))
+cd.add_series("②+③+④", (94.7, 33.3, 19.3))
 gf = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(7.75), Inches(1.45), Inches(5.1), Inches(3.05), cd)
 gf.name = "Chart: percent of raw"
 ch = gf.chart
@@ -218,9 +215,9 @@ dl.position = XL_LABEL_POSITION.OUTSIDE_END
 dl.font.size = Pt(10); dl.font.color.rgb = DARK
 
 findings = [
-    ("제공 보정의 한계. ", "매 프레임 더 낮은 발을 y = 0에 고정해 점프가 지워지고('양발이 뜬 높이' 0.134 → 0), 바닥이 흔들리는 발끝을 따라가 떨림이 오히려 4% 늘어난다."),
-    ("개선 후처리로 해결. ", "바닥을 영상 전체에서 한 번만 정하고 2D의 몸 위치를 더해 점프를 유지했다(0.127, 2D 점프와의 상관 0.27 → 0.59). 떨림 −67%, jerk −81%, 발 드는 높이는 유지."),
-    ("남은 한계. ", "발 가시성이 낮은 관절·프레임 3,435개 중 짧은 구간 759개(22%)만 보간됐다. 긴 구간은 보간하지 않지만, 대부분 발은 화면 안에 있고 점수만 낮은 경우라 위치는 쓸 만하다. 2D→3D 변환은 고정 카메라와 일정한 촬영 거리를 가정한다."),
+    ("① 높이 보정의 한계: ", "매 프레임 더 낮은 발을 y = 0에 붙여 점프가 지워지고('양발이 뜬 높이' 0.134 → 0), 흔들리는 발끝을 바닥으로 삼아 떨림이 오히려 4% 늘어난다."),
+    ("②~④로 해결: ", "바닥을 영상 전체에서 한 번만 정하고 2D의 몸 위치를 더해 점프를 살렸다(0.127, 2D 점프와의 상관 0.27 → 0.59). 떨림 −67%, jerk −81%, 발 드는 높이는 유지."),
+    ("남은 한계: ", "발 좌표 신뢰도가 낮은 관절·프레임 3,435개 중 짧은 구간 759개(22%)만 ②로 채웠다. 긴 구간은 검출된 좌표를 그대로 쓴다. ③은 고정 카메라와 일정한 촬영 거리를 가정한다."),
 ]
 card(s, 0.5, 4.65, 12.35, 2.05, "Findings card")
 text(s, 0.75, 4.78, 11.9, 1.85, [[(h, {"bold": True, "color": BLUE, "size": 13}), (b, {"size": 13})] for h, b in findings],
