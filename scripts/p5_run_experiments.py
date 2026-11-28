@@ -2,18 +2,24 @@
 scripts/p5_run_experiments.py
 
 Reproduces the experiment table and figures of the report from data/raw_keypoints/.
-Each configuration is trained on 3 different video-level train/val splits (SEEDS) and the
-mean +- std validation accuracy is reported, both at the best epoch (what p3 saves) and at
-the last epoch (no selection on validation data, the more honest number).
+
+Evaluation = 5-fold cross-validation by video:
+  - a source video and its mirrored copy form one group (never split between train and val)
+  - inside each step, the groups are dealt into N_FOLDS folds; every fold is the validation set once,
+    so every video is tested exactly once
+  - scores are per VIDEO first, then averaged, so a 48 s video counts as much as a 3 s one:
+      video_window_acc  share of a video's 1 s windows predicted correctly, averaged over videos
+      video_vote_acc    share of videos whose averaged prediction (as in p4) is correct
+      class_balanced    video_window_acc averaged per step first, then over the 5 steps
+  - all numbers are at the last epoch (no choice of epoch on validation data)
 
 Run from final_project/ :
     python scripts/p5_run_experiments.py
-("balanced" = mean per-class recall on the validation windows, last epoch)
-Outputs:
-    docs/figures/experiments.csv
-    docs/figures/experiments.png          bar chart of all configurations
-    docs/figures/confusion_matrix.png     final model (CNN + velocity + balance), seed 42 split, last epoch
-    docs/figures/per_video.csv            per validation video: true / predicted step
+Outputs (docs/figures/):
+    experiments.csv         one row per configuration (pooled scores + spread over folds)
+    experiments.png         bar chart of all configurations
+    confusion_matrix.png    final model, every video once (video-level vote)
+    per_video.csv           final model: true / predicted step and window accuracy of every video
 """
 import sys
 from pathlib import Path
@@ -28,28 +34,31 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import p2_create_dataset as p2
-from features import make_features, resample_fps, video_fps
+from features import make_features, resample_fps, video_fps, load_root
 from p3_train_mlp import build_model, class_weights, BATCH_SIZE, EPOCHS, LEARNING_RATE
 
 ROOT = Path(__file__).resolve().parent.parent
 IN_DIR = ROOT / "data" / "raw_keypoints"
 OUT_DIR = ROOT / "docs" / "figures"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
-SEEDS = [1, 7, 42]
+N_FOLDS = 5
+FOLD_SEED = 0
 STRIDE = 15
 
-# (name, experiment group, model, joints, normalize, velocity, window frames, balance)
+# (name, experiment group, model, joints, normalize, velocity, window frames, balance, pelvis motion)
 # balance = class weights in the loss + at most p2.MAX_WINDOWS_PER_VIDEO training windows per video
+# pelvis motion = heights from the floor + whole-body travel from the 2D track (features.ROOT_MOTION)
 CONFIGS = [
-    ("MLP | none",               "3 preprocessing", "mlp", "lower", "none",  False, 30, False),
-    ("MLP | video-align",        "3 preprocessing", "mlp", "lower", "video", False, 30, False),
-    ("MLP | frame-align",        "3 preprocessing", "mlp", "lower", "frame", False, 30, False),
-    ("MLP | video-align | 2s",   "window",          "mlp", "lower", "video", False, 60, False),
-    ("MLP | video-align | full", "2 lower vs full", "mlp", "full",  "video", False, 30, False),
-    ("MLP | +velocity",          "feature",         "mlp", "lower", "video", True,  30, False),
-    ("CNN | position",           "1 model",         "cnn", "lower", "video", False, 30, False),
-    ("CNN | +velocity",          "1 model",         "cnn", "lower", "video", True,  30, False),
-    ("CNN | +velocity +balance (final)", "imbalance", "cnn", "lower", "video", True, 30, True),
+    ("MLP | none",               "3 preprocessing", "mlp", "lower", "none",  False, 30, False, False),
+    ("MLP | video-align",        "3 preprocessing", "mlp", "lower", "video", False, 30, False, False),
+    ("MLP | frame-align",        "3 preprocessing", "mlp", "lower", "frame", False, 30, False, False),
+    ("MLP | video-align | 2s",   "window",          "mlp", "lower", "video", False, 60, False, False),
+    ("MLP | video-align | full", "2 lower vs full", "mlp", "full",  "video", False, 30, False, False),
+    ("MLP | +velocity",          "feature",         "mlp", "lower", "video", True,  30, False, False),
+    ("CNN | position",           "1 model",         "cnn", "lower", "video", False, 30, False, False),
+    ("CNN | +velocity",          "1 model",         "cnn", "lower", "video", True,  30, False, False),
+    ("CNN | +velocity +balance (final)", "imbalance", "cnn", "lower", "video", True, 30, True, False),
+    ("CNN | +velocity +balance +pelvis motion", "pelvis", "cnn", "lower", "video", True, 30, True, True),
 ]
 FINAL = "CNN | +velocity +balance (final)"
 
@@ -58,27 +67,46 @@ labels = {d.name: i for i, d in enumerate(class_dirs)}
 names = list(labels)
 raw = {d.name: {p: resample_fps(p2.load_raw_keypoints(p), video_fps(p))
                 for p in sorted(d.glob("*.npz"))} for d in class_dirs}
+roots = {k: {p: load_root(p, m, True) for p, m in v.items()} for k, v in raw.items()}
+
+
+def make_folds(n_folds=N_FOLDS, seed=FOLD_SEED):
+    """{path: fold}. Groups = source video + its mirror; dealt round-robin per step after a shuffle."""
+    rng = np.random.default_rng(seed)
+    fold_of = {}
+    for d in class_dirs:
+        groups = {}
+        for p in raw[d.name]:
+            groups.setdefault(p2.source_of(p), []).append(p)
+        keys = sorted(groups)
+        rng.shuffle(keys)
+        for i, k in enumerate(keys):
+            for p in groups[k]:
+                fold_of[p] = i % n_folds
+    return fold_of
+
+
+FOLD_OF = make_folds()
 
 
 def windows(f, L):
     return [f[s:s + L].reshape(L, -1) for s in range(0, len(f) - L + 1, STRIDE)]
 
 
-def build(seed, joints, normalize, velocity, L, balance=False):
-    rng = np.random.default_rng(seed)
-    cap_rng = np.random.default_rng(seed + 1)
+def build(fold, joints, normalize, velocity, L, balance=False, pelvis=False):
+    cap_rng = np.random.default_rng(fold + 1)
     data = {"train": ([], [], []), "val": ([], [], [])}
     for d in class_dirs:
-        tr, va = p2.split_video_paths(list(raw[d.name]), rng)
-        for split, paths in (("train", tr), ("val", va)):
-            for p in paths:
-                w = windows(make_features(raw[d.name][p], joints, normalize, velocity), L)
-                if balance and split == "train":
-                    w = p2.cap_windows(w, cap_rng)
-                X, y, v = data[split]
-                X += w
-                y += [labels[d.name]] * len(w)
-                v += [f"{d.name}/{p.stem}"] * len(w)
+        for p in raw[d.name]:
+            split = "val" if FOLD_OF[p] == fold else "train"
+            root = roots[d.name][p] if pelvis else None
+            w = windows(make_features(raw[d.name][p], joints, normalize, velocity, root=root), L)
+            if balance and split == "train":
+                w = p2.cap_windows(w, cap_rng)
+            X, y, v = data[split]
+            X += w
+            y += [labels[d.name]] * len(w)
+            v += [f"{d.name}/{p.stem}"] * len(w)
     out = {}
     for split, (X, y, v) in data.items():
         out[split] = (torch.tensor(np.asarray(X), dtype=torch.float32),
@@ -87,13 +115,13 @@ def build(seed, joints, normalize, velocity, L, balance=False):
 
 
 def train(model_type, data, seed, balance=False):
+    """train for EPOCHS, return softmax probabilities on the validation windows (last epoch)"""
     torch.manual_seed(seed)
     Xtr, ytr, _ = data["train"]
-    Xva, yva, _ = data["val"]
+    Xva, _, _ = data["val"]
     model = build_model(model_type, tuple(Xtr.shape[1:]), len(labels))
     opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
     ce = nn.CrossEntropyLoss(weight=class_weights(ytr, len(labels)) if balance else None)
-    best = 0.0
     for _ in range(EPOCHS):
         model.train()
         perm = torch.randperm(len(ytr))
@@ -104,63 +132,73 @@ def train(model_type, data, seed, balance=False):
             opt.zero_grad()
             ce(model(Xtr[b]), ytr[b]).backward()
             opt.step()
-        model.eval()
-        with torch.no_grad():
-            pred = model(Xva).argmax(1)
-        acc = (pred == yva).float().mean().item()
-        best = max(best, acc)
+    model.eval()
     with torch.no_grad():
-        prob = torch.softmax(model(Xva), 1).numpy()
-    y, pred = yva.numpy(), prob.argmax(1)
-    balanced = np.mean([(pred[y == c] == c).mean() for c in np.unique(y)])   # mean per-class recall
-    return best, acc, balanced, prob
+        return torch.softmax(model(Xva), 1).numpy()
+
+
+def per_video_rows(y, prob, vids, fold):
+    rows = []
+    for v in dict.fromkeys(vids):
+        m = vids == v
+        true = int(y[m][0])
+        rows.append({"video": v, "fold": fold, "true": names[true],
+                     "pred": names[int(prob[m].mean(0).argmax())],
+                     "window_acc": float((prob[m].argmax(1) == true).mean()),
+                     "windows": int(m.sum())})
+    pv = pd.DataFrame(rows)
+    pv["correct"] = pv.true == pv.pred
+    return pv
+
+
+def scores(pv):
+    return {"video_window_acc": pv.window_acc.mean(),
+            "video_vote_acc": pv.correct.mean(),
+            "class_balanced": pv.groupby("true").window_acc.mean().mean()}
 
 
 def main():
-    rows, final_eval = [], None
-    for name, group, model_type, joints, norm, vel, L, bal in CONFIGS:
-        bests, lasts, bals = [], [], []
-        for seed in SEEDS:
-            data = build(seed, joints, norm, vel, L, bal)
-            b, a, ba, prob = train(model_type, data, seed, bal)
-            bests.append(b)
-            lasts.append(a)
-            bals.append(ba)
-            if name == FINAL and seed == 42:
-                final_eval = (data["val"][1].numpy(), prob, data["val"][2])
-        rows.append({"config": name, "experiment": group,
-                     "best_mean": np.mean(bests), "best_std": np.std(bests),
-                     "last_mean": np.mean(lasts), "last_std": np.std(lasts),
-                     "last_balanced_mean": np.mean(bals),
-                     "best_per_seed": [round(x, 3) for x in bests],
-                     "last_per_seed": [round(x, 3) for x in lasts]})
-        r = rows[-1]
-        print(f"{name:28s} best {r['best_mean']:.3f}+-{r['best_std']:.3f} | "
-              f"last {r['last_mean']:.3f}+-{r['last_std']:.3f} | balanced {r['last_balanced_mean']:.3f}", flush=True)
+    sizes = pd.crosstab([p.parent.name for p in FOLD_OF], [f for f in FOLD_OF.values()])
+    print(f"{N_FOLDS}-fold CV, validation files per step (rows) and fold (columns):\n{sizes}\n")
+    rows, final_pv = [], None
+    for name, group, model_type, joints, norm, vel, L, bal, pel in CONFIGS:
+        pvs, fold_acc = [], []
+        for fold in range(N_FOLDS):
+            data = build(fold, joints, norm, vel, L, bal, pel)
+            prob = train(model_type, data, fold, bal)
+            pv = per_video_rows(data["val"][1].numpy(), prob, data["val"][2], fold)
+            pvs.append(pv)
+            fold_acc.append(pv.window_acc.mean())
+        pv = pd.concat(pvs, ignore_index=True)           # every video exactly once
+        s = scores(pv)
+        rows.append({"config": name, "experiment": group, **s,
+                     "fold_std": float(np.std(fold_acc)),
+                     "per_fold": [round(x, 3) for x in fold_acc]})
+        if name == FINAL:
+            final_pv = pv
+        print(f"{name:42s} video-window {s['video_window_acc']:.3f} (folds +-{np.std(fold_acc):.3f}) | "
+              f"video-vote {s['video_vote_acc']:.3f} | class-balanced {s['class_balanced']:.3f}", flush=True)
 
     df = pd.DataFrame(rows)
     df.to_csv(OUT_DIR / "experiments.csv", index=False)
 
-    # bar chart
-    fig, ax = plt.subplots(figsize=(10, 4.5))
+    fig, ax = plt.subplots(figsize=(10.5, 4.5))
     x = np.arange(len(df))
-    ax.bar(x - 0.2, df.best_mean, 0.4, yerr=df.best_std, capsize=3, label="best epoch", color="#4C72B0")
-    ax.bar(x + 0.2, df.last_mean, 0.4, yerr=df.last_std, capsize=3, label="last epoch", color="#DD8452")
+    ax.bar(x - 0.2, df.video_window_acc, 0.4, yerr=df.fold_std, capsize=3,
+           label="per-video window accuracy (+- std over folds)", color="#4C72B0")
+    ax.bar(x + 0.2, df.video_vote_acc, 0.4, label="per-video vote accuracy", color="#DD8452")
     ax.axhline(1 / len(labels), color="gray", ls="--", lw=1, label="chance (20%)")
     ax.set_xticks(x, df.config, rotation=30, ha="right", fontsize=8)
-    ax.set_ylabel("validation accuracy (windows)")
+    ax.set_ylabel("validation accuracy")
     ax.set_ylim(0, 1)
-    ax.set_title("Validation accuracy, mean +- std over 3 video-level splits")
-    ax.legend(fontsize=8)
+    ax.set_title(f"{N_FOLDS}-fold cross-validation by video, last epoch (every video tested once)")
+    ax.legend(fontsize=8, loc="upper left")
     fig.tight_layout()
     fig.savefig(OUT_DIR / "experiments.png", dpi=150)
 
-    # confusion matrix (windows) + per-video vote for the final model
-    y, prob, vids = final_eval
-    pred = prob.argmax(1)
     cm = np.zeros((len(names), len(names)), int)
-    for t, p in zip(y, pred):
-        cm[t, p] += 1
+    for t, p in zip(final_pv.true, final_pv.pred):
+        cm[labels[t], labels[p]] += 1
     fig, ax = plt.subplots(figsize=(5.5, 4.8))
     ax.imshow(cm, cmap="Blues")
     for i in range(len(names)):
@@ -171,21 +209,13 @@ def main():
     ax.set_yticks(range(len(names)), names, fontsize=8)
     ax.set_xlabel("predicted")
     ax.set_ylabel("true")
-    ax.set_title(f"{FINAL}, seed 42 split, last epoch\n"
-                 f"window accuracy {(pred == y).mean():.1%}", fontsize=9)
+    ax.set_title(f"{FINAL}\n{N_FOLDS}-fold CV, videos (each once): vote accuracy {final_pv.correct.mean():.1%}",
+                 fontsize=9)
     fig.tight_layout()
     fig.savefig(OUT_DIR / "confusion_matrix.png", dpi=150)
 
-    per_video = []
-    for v in dict.fromkeys(vids):
-        m = vids == v
-        p = prob[m].mean(0).argmax()
-        per_video.append({"video": v, "true": names[y[m][0]], "pred": names[p],
-                          "correct": names[p] == names[y[m][0]], "windows": int(m.sum())})
-    pv = pd.DataFrame(per_video)
-    pv.to_csv(OUT_DIR / "per_video.csv", index=False)
-    print(f"\nper-video accuracy (final model, seed 42 split): {pv.correct.mean():.1%}")
-    print(pv.to_string(index=False))
+    final_pv.to_csv(OUT_DIR / "per_video.csv", index=False)
+    print(f"\nfinal model, wrong videos:\n{final_pv[~final_pv.correct].to_string(index=False)}")
     print(f"\nsaved -> {OUT_DIR}")
 
 

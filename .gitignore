@@ -22,3 +22,6 @@ __pycache__/
 Thumbs.db
 .vscode/
 .idea/
+
+# excluded videos: keep only the rename maps
+data/excluded/**/*.npz

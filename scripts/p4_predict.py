@@ -18,7 +18,7 @@ from importlib import import_module
 
 # Import the same model used during training
 build_model = import_module("p3_train_mlp").build_model
-from features import make_features, video_fps, resample_fps
+from features import make_features, video_fps, resample_fps, load_root
 
 MODEL_META_PATH = ROOT / "checkpoints" / "model_meta.json"  # written by p3_train_mlp.py
 LABEL_PATH = ROOT / "data" / "dataset" / "labels.json"
@@ -136,8 +136,10 @@ def main():
 
     # Load and prepare input
     motion = load_raw_keypoints(INPUT_PATH)
-    sequences = create_sequences(make_features(resample_fps(motion, video_fps(INPUT_PATH)), meta["feature_set"],
-                      meta.get("normalize", "none"), meta.get("velocity", False)))
+    resampled = resample_fps(motion, video_fps(INPUT_PATH))
+    root = load_root(INPUT_PATH, resampled, meta.get("root_motion", False))
+    sequences = create_sequences(make_features(resampled, meta["feature_set"],
+                      meta.get("normalize", "none"), meta.get("velocity", False), root=root))
 
     X = torch.from_numpy(sequences).to(device)
 

@@ -4,7 +4,7 @@ import json
 import pandas as pd
 import numpy as np
 
-from features import FEATURE_SET, make_features, feature_meta, video_fps, resample_fps, TARGET_FPS
+from features import FEATURE_SET, make_features, feature_meta, video_fps, resample_fps, load_root, TARGET_FPS
 
 ROOT = Path(__file__).resolve().parent.parent
 INPUT_DIR = ROOT / "data" / "raw_keypoints"
@@ -170,7 +170,7 @@ def build_dataset():
                 #    instead of using folder names.
 
                 # 1. -> joint selection + pelvis-centered coordinates (features.py)
-                motion = make_features(motion, FEATURE_SET)
+                motion = make_features(motion, FEATURE_SET, root=load_root(path, motion))
 
                 sequences = create_sequences(motion)
 

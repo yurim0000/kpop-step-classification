@@ -165,6 +165,108 @@ def image_metrics(img):
     }, hip / leg_px
 
 
+# ---------------------------------------------------------------- improved post-processing (bonus)
+FOOT = list(range(27, 33))     # ankles, heels, toes
+VIS_MIN = 0.5                  # below this, a foot joint is treated as unreliable
+MAX_GAP = 10                   # interpolate unreliable / missing stretches up to 10 frames (0.33 s at 30 fps)
+
+
+def gap_runs(bad, max_gap):
+    """bad: (T,) bool -> boolean mask of the bad frames that can be interpolated:
+    runs of length <= max_gap with a good frame on both sides."""
+    ok = np.zeros_like(bad)
+    t, T = 0, len(bad)
+    while t < T:
+        if not bad[t]:
+            t += 1
+            continue
+        s = t
+        while t < T and bad[t]:
+            t += 1
+        if s > 0 and t < T and t - s <= max_gap:
+            ok[s:t] = True
+    return ok
+
+
+def interp_frames(arr, good):
+    """arr: (T, ...) ; replace every frame where good is False by linear interpolation over time."""
+    out = arr.copy()
+    t = np.arange(len(arr))
+    flat = out.reshape(len(arr), -1)
+    for c in range(flat.shape[1]):
+        flat[~good, c] = np.interp(t[~good], t[good], flat[good, c])
+    return out
+
+
+def fill_gaps(d):
+    """
+    Problem C (missing frames / unreliable feet):
+    1. put every frame back on its original index; missing stretches of <= MAX_GAP frames are
+       interpolated, longer ones are dropped (nothing reliable to interpolate from)
+    2. foot joints with visibility < VIS_MIN: stretches of <= MAX_GAP frames are interpolated from the
+       reliable frames around them; longer stretches are kept as detected (cannot be recovered)
+    Returns world (T,33,3), image (T,33,2) or None, stats.
+    """
+    T = int(d["frames"][-1]) + 1
+    idx = d["frames"].astype(int)
+    missing = np.ones(T, bool); missing[idx] = False
+    W = np.zeros((T, 33, 3)); W[idx] = d["world"]
+    V = np.zeros((T, 33)); V[idx] = d["vis"]
+    I = None
+    if d["image"] is not None:
+        I = np.zeros((T, 33, 2)); I[idx] = d["image"]
+
+    fill_missing = gap_runs(missing, MAX_GAP)
+    W = interp_frames(W, ~missing)
+    if I is not None:
+        I = interp_frames(I, ~missing)
+    keep = ~missing | fill_missing
+
+    n_low = n_filled = 0
+    for j in FOOT:
+        low = (V[:, j] < VIS_MIN) & ~missing
+        fix = gap_runs(low, MAX_GAP)
+        n_low += int(low.sum())
+        n_filled += int(fix.sum())
+        if fix.any():
+            good = ~fix
+            W[:, j] = interp_frames(W[:, j], good)
+            if I is not None:
+                I[:, j] = interp_frames(I[:, j], good)
+    stats = {"missing_frames": int(missing.sum()), "missing_filled": int(fill_missing.sum()),
+             "foot_lowvis": n_low, "foot_filled": n_filled}
+    return W[keep], (I[keep] if I is not None else None), stats
+
+
+def add_root_from_image(W, I):
+    """
+    Problem A (no ground / no travel): world landmarks are hip-centered, so the whole-body motion is lost.
+    The fixed camera still sees it: take the 2D hip position, convert pixels -> meters with the ratio of
+    3D leg length to 2D leg length, and add it back as a root translation (x sideways, y up).
+    The floor is ONE level for the whole clip (5th percentile of the lowest foot), not per frame,
+    so frames where both feet leave the ground (jumps) are kept.
+    """
+    hip3 = (W[:, 23] + W[:, 24]) / 2
+    leg3 = np.median(np.linalg.norm(hip3 - (W[:, 27] + W[:, 28]) / 2, axis=1))
+    hip2 = (I[:, 23] + I[:, 24]) / 2
+    leg2 = np.median(np.linalg.norm(hip2 - (I[:, 27] + I[:, 28]) / 2, axis=1))
+    s = leg3 / leg2                                             # meters per pixel (approx., same depth)
+    out = W.copy()
+    out[:, :, 0] += (s * (hip2[:, 0] - hip2[0, 0]))[:, None]
+    out[:, :, 1] += (s * (hip2[:, 1] - hip2[0, 1]))[:, None]
+    foot_low = np.minimum(np.minimum(out[:, 29, 1], out[:, 31, 1]), np.minimum(out[:, 30, 1], out[:, 32, 1]))
+    out[:, :, 1] -= np.percentile(foot_low, 5)                  # clip-level floor at y = 0
+    return out
+
+
+def improved_postprocess(d):
+    """gap filling (C) -> root trajectory from the 2D image + clip-level floor (A) -> Savitzky-Golay (B)"""
+    W, I, stats = fill_gaps(d)
+    seq = add_root_from_image(W, I) if I is not None else create_height_corrected_target(W)
+    seq = savgol_filter(seq, SG_WINDOW, SG_POLY, axis=0)
+    return seq, stats
+
+
 # ---------------------------------------------------------------- per file
 def analyze(path, fps=None, plot=True):
     d = load_raw(path)
@@ -181,14 +283,16 @@ def analyze(path, fps=None, plot=True):
     corrected = create_height_corrected_target(raw)
     smoothed = savgol_filter(corrected, SG_WINDOW, SG_POLY, axis=0)
     smoothed[:, :, 1] = np.maximum(smoothed[:, :, 1], 0)
-    conds = {"raw": raw, "height_corrected (provided)": corrected, "corrected + smoothing (bonus)": smoothed}
+    improved, gap_stats = improved_postprocess(d)
+    conds = {"raw": raw, "height_corrected (provided)": corrected, "corrected + smoothing (bonus)": smoothed,
+             "improved (bonus)": improved}
 
     img_m, img_hip = ({}, None) if d["image"] is None else image_metrics(d["image"])
     rows, heights, yaws = [], {}, None
     for cname, seq in conds.items():
         m, heights[cname], yaw = compute_metrics(seq, leg, fps)
         yaws = yaw if yaws is None else yaws
-        rows.append({"file": name, "step": path.parent.name, "condition": cname, **m, **img_m})
+        rows.append({"file": name, "step": path.parent.name, "condition": cname, **m, **img_m, **gap_stats})
     table = pd.DataFrame(rows)
 
     print(f"\n=== {path.parent.name}/{name}  (frames={len(raw)}, fps={fps:g}) ===")
@@ -201,7 +305,9 @@ def analyze(path, fps=None, plot=True):
           f"{np.sqrt(np.mean(np.diff(foot_y, n=2) ** 2)):.4f}")
     if d["image"] is None:
         print("no image landmarks in this npz (re-extract with the current p1 to get travel / jump metrics)")
-    print(table.drop(columns=["file", "step"] + list(img_m)).round(3).to_string(index=False))
+    print(f"improved: missing frames filled {gap_stats['missing_filled']}/{gap_stats['missing_frames']}, "
+          f"low-visibility foot joint-frames filled {gap_stats['foot_filled']}/{gap_stats['foot_lowvis']}")
+    print(table.drop(columns=["file", "step"] + list(img_m) + list(gap_stats)).round(3).to_string(index=False))
     if img_m:
         print("image (2D):", {k: round(v, 3) for k, v in img_m.items()})
 
