@@ -142,15 +142,41 @@ code_ref(s, 6.95, "scripts/p1_3_analyze_postprocessing.py   (지표 단위: 다�
 s = content[2]
 set_text(shape(s, "TextBox 6"), "3. 후처리")
 remove(s, "TextBox 33", "TextBox 3")
-card(s, 0.5, 1.45, 12.35, 1.95, "Method card")
-steps = [("① 높이 보정 → A  ", "매 프레임 더 낮은 발끝을 바닥(y = 0)에 맞춘다:  ground(t) = min(y_왼발끝, y_오른발끝),  y ← max(y − ground, 0)"),
-         ("② 빈 구간 보간 → C  ", "포즈가 빠지거나 발 좌표 신뢰도가 낮은 구간 중 0.33초 이하를 앞뒤 값으로 채운다"),
-         ("③ 몸 전체 위치 복원 → A  ", "①은 점프까지 바닥에 붙이므로, 2D 영상의 골반 위치를 m 단위로 바꿔 더하고 바닥은 영상 전체에서 한 번만 정한다"),
-         ("④ Savitzky-Golay 평활화 → B  ", "창 9프레임(0.3초), 3차 다항식. 스텝의 최고점은 유지된다")]
-text(s, 0.75, 1.55, 11.9, 1.8, [[("문제 해결을 위한 후처리", {"bold": True, "color": BLUE, "size": 16}),
-                                 ("   ①은 제공 코드, ②~④는 추가 구현", {"color": MUTED, "size": 12})]] +
-     [[(h, {"bold": True, "color": BLUE, "size": 12}), (b, {"size": 12})] for h, b in steps], name="Method steps")
-picture(s, FIG / "fig3_postprocessing.png", 0.5, 3.5, w=12.3, name="Figure: improved post-processing",
+text(s, 0.5, 1.42, 12.35, 0.35, [[("문제 해결을 위한 후처리", {"bold": True, "color": BLUE, "size": 16}),
+                                 ("   ①은 제공 코드, ②~④는 추가 구현", {"color": MUTED, "size": 12})]], name="Method title")
+prow = [("후처리", "해결할 문제", "설명", "결과 (44개 영상 중앙값)"),
+        ("① 높이 보정", "A. 바닥 없음",
+         "매 프레임 더 낮은 발끝을 바닥(y = 0)에 맞춘다",
+         "바닥은 생기지만 점프가 지워진다(양발이 뜬 높이 0.134 → 0), 떨림 +4%"),
+        ("② 빈 구간 보간", "C. 발 좌표 추출의 어려움",
+         "포즈가 빠지거나 발 좌표 신뢰도가 낮은 구간 중 0.33초 이하를 앞뒤 값으로 채운다",
+         "신뢰도 낮은 관절·프레임 3,435개 중 759개(22%) 채움"),
+        ("③ 몸 전체 위치 복원", "A. 바닥 없음 (①의 한계 보완)",
+         "2D 영상의 골반 위치를 m 단위로 바꿔 더하고, 바닥은 영상 전체에서 한 번만 정한다",
+         "점프 유지(0.127), 2D 점프 크기와의 상관 0.27 → 0.59"),
+        ("④ Savitzky-Golay 평활화", "B. 프레임 간 떨림",
+         "창 9프레임(0.3초), 3차 다항식으로 선을 부드럽게 다듬는다",
+         "떨림 −67%, jerk −81%, 발 드는 높이 유지")]
+ptbl = s.shapes.add_table(len(prow), 4, Inches(0.5), Inches(1.85), Inches(12.35), Inches(2.0))
+ptbl.name = "Post-processing table"
+pt = ptbl.table
+for j, w in enumerate([2.25, 2.25, 4.6, 3.25]):
+    pt.columns[j].width = Inches(w)
+for i, row in enumerate(prow):
+    pt.rows[i].height = Inches(0.32 if i == 0 else 0.42)
+    for j, v in enumerate(row):
+        c = pt.cell(i, j)
+        c.fill.solid(); c.fill.fore_color.rgb = BLUE if i == 0 else (TINT if i % 2 == 0 else WHITE)
+        c.margin_left = c.margin_right = Inches(0.08)
+        c.margin_top = c.margin_bottom = Inches(0.03)
+        c.vertical_anchor = MSO_ANCHOR.MIDDLE
+        p = c.text_frame.paragraphs[0]
+        p._p.get_or_add_pPr().set("latinLnBrk", "0"); p._p.get_or_add_pPr().set("eaLnBrk", "0")
+        r = p.add_run(); r.text = v
+        r.font.size = Pt(11); r.font.bold = (i == 0 or j == 0)
+        r.font.color.rgb = WHITE if i == 0 else (BLUE if j == 0 else DARK)
+        r._r.get_or_add_rPr().set("lang", "ko-KR")
+picture(s, FIG / "fig3_postprocessing.png", 1.27, 3.95, w=10.8, name="Figure: improved post-processing",
         alt="A: lowest-foot height is pinned to zero by the provided correction but follows the 2D reference after the improved method. B: toe height jitter before and after smoothing. C: short low-visibility stretches interpolated, long ones left as detected")
 code_ref(s, 6.95, "①  scripts/p1_2_post_processing.py      ②~④  scripts/p1_3_analyze_postprocessing.py (improved_postprocess)")
 

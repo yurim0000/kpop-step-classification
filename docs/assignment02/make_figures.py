@@ -32,12 +32,14 @@ BONES = [(11, 12), (11, 23), (12, 24), (23, 24), (11, 13), (13, 15), (12, 14), (
 LOWER = set(range(23, 33))
 
 # ---------------------------------------------------------------- 1. acquisition
-cap = cv2.VideoCapture(str(ROOT / "data" / "raw_videos" / f"{CLIP}.mp4"))
-cap.set(cv2.CAP_PROP_POS_FRAMES, int(d["frames"][FRAME]))
+FIG1_CLIP, FIG1_FRAME = "charleston/charleston_7", 60       # example frame shown on slide 1
+d1 = a.load_raw(ROOT / "data" / "raw_keypoints" / f"{FIG1_CLIP}.npz")
+cap = cv2.VideoCapture(str(ROOT / "data" / "raw_videos" / f"{FIG1_CLIP}.mp4"))
+cap.set(cv2.CAP_PROP_POS_FRAMES, int(d1["frames"][FIG1_FRAME]))
 ok, img = cap.read()
 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 H = img.shape[0]
-px = d["image"][FRAME].copy(); px[:, 1] = -px[:, 1]          # back to y down
+px = d1["image"][FIG1_FRAME].copy(); px[:, 1] = -px[:, 1]    # back to y down
 fig = plt.figure(figsize=(7.6, 5.2))
 ax = fig.add_subplot(1, 2, 1)
 x0, x1 = max(0, px[:, 0].min() - 160), min(img.shape[1], px[:, 0].max() + 160)
@@ -49,7 +51,7 @@ for i, j in BONES:
 ax.scatter(px[:, 0] - x0, px[:, 1] - y0, s=9, c="white", zorder=3)
 ax.set_title("영상 + BlazePose 2D 관절"); ax.axis("off")
 ax = fig.add_subplot(1, 2, 2, projection="3d")
-P = W[FRAME]
+P = d1["world"][FIG1_FRAME]
 for i, j in BONES:
     c = ORANGE if (i in LOWER and j in LOWER) else BLUE
     ax.plot([P[i, 0], P[j, 0]], [P[i, 2], P[j, 2]], [P[i, 1], P[j, 1]], c=c, lw=2.2)
