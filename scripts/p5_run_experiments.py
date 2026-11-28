@@ -8,10 +8,11 @@ the last epoch (no selection on validation data, the more honest number).
 
 Run from final_project/ :
     python scripts/p5_run_experiments.py
+("balanced" = mean per-class recall on the validation windows, last epoch)
 Outputs:
     docs/figures/experiments.csv
     docs/figures/experiments.png          bar chart of all configurations
-    docs/figures/confusion_matrix.png     final model (CNN + velocity), seed 42 split, last epoch
+    docs/figures/confusion_matrix.png     final model (CNN + velocity + balance), seed 42 split, last epoch
     docs/figures/per_video.csv            per validation video: true / predicted step
 """
 import sys
@@ -28,7 +29,7 @@ import matplotlib.pyplot as plt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import p2_create_dataset as p2
 from features import make_features, resample_fps, video_fps
-from p3_train_mlp import build_model, BATCH_SIZE, EPOCHS, LEARNING_RATE
+from p3_train_mlp import build_model, class_weights, BATCH_SIZE, EPOCHS, LEARNING_RATE
 
 ROOT = Path(__file__).resolve().parent.parent
 IN_DIR = ROOT / "data" / "raw_keypoints"
@@ -37,18 +38,20 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 SEEDS = [1, 7, 42]
 STRIDE = 15
 
-# (name, experiment group, model, joints, normalize, velocity, window frames)
+# (name, experiment group, model, joints, normalize, velocity, window frames, balance)
+# balance = class weights in the loss + at most p2.MAX_WINDOWS_PER_VIDEO training windows per video
 CONFIGS = [
-    ("MLP | none",               "3 preprocessing", "mlp", "lower", "none",  False, 30),
-    ("MLP | video-align",        "3 preprocessing", "mlp", "lower", "video", False, 30),
-    ("MLP | frame-align",        "3 preprocessing", "mlp", "lower", "frame", False, 30),
-    ("MLP | video-align | 2s",   "window",          "mlp", "lower", "video", False, 60),
-    ("MLP | video-align | full", "2 lower vs full", "mlp", "full",  "video", False, 30),
-    ("MLP | +velocity",          "feature",         "mlp", "lower", "video", True,  30),
-    ("CNN | position",           "1 model",         "cnn", "lower", "video", False, 30),
-    ("CNN | +velocity (final)",  "1 model",         "cnn", "lower", "video", True,  30),
+    ("MLP | none",               "3 preprocessing", "mlp", "lower", "none",  False, 30, False),
+    ("MLP | video-align",        "3 preprocessing", "mlp", "lower", "video", False, 30, False),
+    ("MLP | frame-align",        "3 preprocessing", "mlp", "lower", "frame", False, 30, False),
+    ("MLP | video-align | 2s",   "window",          "mlp", "lower", "video", False, 60, False),
+    ("MLP | video-align | full", "2 lower vs full", "mlp", "full",  "video", False, 30, False),
+    ("MLP | +velocity",          "feature",         "mlp", "lower", "video", True,  30, False),
+    ("CNN | position",           "1 model",         "cnn", "lower", "video", False, 30, False),
+    ("CNN | +velocity",          "1 model",         "cnn", "lower", "video", True,  30, False),
+    ("CNN | +velocity +balance (final)", "imbalance", "cnn", "lower", "video", True, 30, True),
 ]
-FINAL = "CNN | +velocity (final)"
+FINAL = "CNN | +velocity +balance (final)"
 
 class_dirs = sorted(p for p in IN_DIR.iterdir() if p.is_dir())
 labels = {d.name: i for i, d in enumerate(class_dirs)}
@@ -61,14 +64,17 @@ def windows(f, L):
     return [f[s:s + L].reshape(L, -1) for s in range(0, len(f) - L + 1, STRIDE)]
 
 
-def build(seed, joints, normalize, velocity, L):
+def build(seed, joints, normalize, velocity, L, balance=False):
     rng = np.random.default_rng(seed)
+    cap_rng = np.random.default_rng(seed + 1)
     data = {"train": ([], [], []), "val": ([], [], [])}
     for d in class_dirs:
         tr, va = p2.split_video_paths(list(raw[d.name]), rng)
         for split, paths in (("train", tr), ("val", va)):
             for p in paths:
                 w = windows(make_features(raw[d.name][p], joints, normalize, velocity), L)
+                if balance and split == "train":
+                    w = p2.cap_windows(w, cap_rng)
                 X, y, v = data[split]
                 X += w
                 y += [labels[d.name]] * len(w)
@@ -80,13 +86,13 @@ def build(seed, joints, normalize, velocity, L):
     return out
 
 
-def train(model_type, data, seed):
+def train(model_type, data, seed, balance=False):
     torch.manual_seed(seed)
     Xtr, ytr, _ = data["train"]
     Xva, yva, _ = data["val"]
     model = build_model(model_type, tuple(Xtr.shape[1:]), len(labels))
     opt = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    ce = nn.CrossEntropyLoss()
+    ce = nn.CrossEntropyLoss(weight=class_weights(ytr, len(labels)) if balance else None)
     best = 0.0
     for _ in range(EPOCHS):
         model.train()
@@ -105,28 +111,32 @@ def train(model_type, data, seed):
         best = max(best, acc)
     with torch.no_grad():
         prob = torch.softmax(model(Xva), 1).numpy()
-    return best, acc, prob
+    y, pred = yva.numpy(), prob.argmax(1)
+    balanced = np.mean([(pred[y == c] == c).mean() for c in np.unique(y)])   # mean per-class recall
+    return best, acc, balanced, prob
 
 
 def main():
     rows, final_eval = [], None
-    for name, group, model_type, joints, norm, vel, L in CONFIGS:
-        bests, lasts = [], []
+    for name, group, model_type, joints, norm, vel, L, bal in CONFIGS:
+        bests, lasts, bals = [], [], []
         for seed in SEEDS:
-            data = build(seed, joints, norm, vel, L)
-            b, a, prob = train(model_type, data, seed)
+            data = build(seed, joints, norm, vel, L, bal)
+            b, a, ba, prob = train(model_type, data, seed, bal)
             bests.append(b)
             lasts.append(a)
+            bals.append(ba)
             if name == FINAL and seed == 42:
                 final_eval = (data["val"][1].numpy(), prob, data["val"][2])
         rows.append({"config": name, "experiment": group,
                      "best_mean": np.mean(bests), "best_std": np.std(bests),
                      "last_mean": np.mean(lasts), "last_std": np.std(lasts),
+                     "last_balanced_mean": np.mean(bals),
                      "best_per_seed": [round(x, 3) for x in bests],
                      "last_per_seed": [round(x, 3) for x in lasts]})
         r = rows[-1]
         print(f"{name:28s} best {r['best_mean']:.3f}+-{r['best_std']:.3f} | "
-              f"last {r['last_mean']:.3f}+-{r['last_std']:.3f}", flush=True)
+              f"last {r['last_mean']:.3f}+-{r['last_std']:.3f} | balanced {r['last_balanced_mean']:.3f}", flush=True)
 
     df = pd.DataFrame(rows)
     df.to_csv(OUT_DIR / "experiments.csv", index=False)

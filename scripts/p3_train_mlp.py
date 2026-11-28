@@ -61,6 +61,13 @@ class ActionCNN1D(nn.Module):
 
 
 MODEL_TYPE = "cnn"   # "mlp" (baseline) | "cnn"  -> model comparison experiment
+CLASS_WEIGHTS = True # class-imbalance fix: classes with fewer training windows weigh more in the loss
+
+
+def class_weights(y, num_classes):
+    """weight_c = N / (C * count_c)  (all 1 when classes are balanced)"""
+    counts = torch.bincount(torch.as_tensor(y), minlength=num_classes).float().clamp(min=1)
+    return counts.sum() / (num_classes * counts)
 
 
 def build_model(model_type, seq_shape, num_classes):
@@ -96,7 +103,8 @@ def main():
     )
 
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+        drop_last=True   # a last batch of 1 sample would crash BatchNorm in the CNN
     )
     val_loader = DataLoader(
         val_dataset, batch_size=BATCH_SIZE
@@ -113,7 +121,10 @@ def main():
         json.dump({"model_type": MODEL_TYPE, "checkpoint": model_path.name,
                    "seq_shape": list(X_train.shape[1:])}, f, indent=2)
 
-    criterion = nn.CrossEntropyLoss()
+    weight = class_weights(y_train, num_classes).to(device) if CLASS_WEIGHTS else None
+    if weight is not None:
+        print("Class weights:", [round(w, 2) for w in weight.tolist()])
+    criterion = nn.CrossEntropyLoss(weight=weight)
     optimizer = torch.optim.Adam(
         model.parameters(),
         lr=LEARNING_RATE

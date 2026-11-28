@@ -14,6 +14,7 @@ SEQ_LENGTH = 30
 STRIDE = 15
 VAL_RATIO = 0.2
 SEED = 42
+MAX_WINDOWS_PER_VIDEO = 20   # training only; None = keep all windows
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,8 +103,22 @@ def split_video_paths(paths, rng):
     return train, val
 
 
+def cap_windows(sequences, rng, k=None):
+    """
+    Class-imbalance fix: keep at most k windows of one TRAINING video (random subset, order kept),
+    so a few long videos (e.g. a 48 s crab clip) do not dominate their class.
+    Validation windows are never dropped.
+    """
+    k = MAX_WINDOWS_PER_VIDEO if k is None else k
+    if k is None or len(sequences) <= k:
+        return sequences
+    keep = np.sort(rng.choice(len(sequences), k, replace=False))
+    return [sequences[i] for i in keep]
+
+
 def build_dataset():
     rng = np.random.default_rng(SEED)
+    cap_rng = np.random.default_rng(SEED + 1)   # separate stream: the split stays the same
 
     class_dirs = sorted(
         p for p in INPUT_DIR.iterdir() if p.is_dir()
@@ -164,6 +179,7 @@ def build_dataset():
                     continue
 
                 if split == "train":
+                    sequences = cap_windows(sequences, cap_rng)
                     X_train.extend(sequences)
                     y_train.extend([label] * len(sequences))
                 else:
@@ -189,7 +205,8 @@ def build_dataset():
         json.dump(labels, f, indent=2, ensure_ascii=False)
 
     # read by p3 (model input size) and p4 (same features at inference)
-    meta = {**feature_meta(FEATURE_SET), "seq_length": SEQ_LENGTH, "stride": STRIDE, "fps": TARGET_FPS}
+    meta = {**feature_meta(FEATURE_SET), "seq_length": SEQ_LENGTH, "stride": STRIDE, "fps": TARGET_FPS,
+            "max_windows_per_video": MAX_WINDOWS_PER_VIDEO}
     with open(OUTPUT_DIR / "feature_meta.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=2)
 
